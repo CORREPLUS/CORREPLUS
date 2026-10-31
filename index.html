@@ -3859,6 +3859,7 @@ const sbError = e => {
   if (/already registered/i.test(m)) return 'Ese correo ya tiene contraseña. Use "Entrar" u "Olvidé mi contraseña".';
   if (/Password should be/i.test(m)) return 'La contraseña debe tener al menos 8 caracteres.';
   if (/rate limit/i.test(m)) return 'Demasiados intentos. Espere unos minutos.';
+  if (/fetch|network/i.test(m)) return 'No hay conexión con el servidor. Revise el internet e intente de nuevo.';
   return m;
 };
 function pantallaLogin(msg, modo){
