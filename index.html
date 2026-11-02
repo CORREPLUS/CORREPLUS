@@ -66,6 +66,7 @@ nav .soon{margin-left:auto;font-size:9px;color:var(--muted);text-transform:none;
 main{padding:20px 24px;min-width:0}
 .top{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
 .top h1{font-size:22px;margin:0;flex:1}
+#dlgF{flex-wrap:wrap}
 .yo{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted)}.yo:empty{display:none}.yo .btn{padding:4px 10px;font-size:12px}
 .ro #actions .btn.primary,.ro #view .btn.danger,.ro #view td .btn{display:none!important}
 body.bloqueado .app{visibility:hidden}
@@ -1110,7 +1111,7 @@ function pregunta(msg, o = {}){
   const c = $('#cfm');
   return new Promise(res => {
     let hecho = false; const fin = v => { if (hecho) return; hecho = true; c.close(); res(v); };
-    $('#cfmB').innerHTML = `<p style="margin:0 0 10px;font-size:15px">${esc(msg)}</p>${o.input ? `<input id="cfmIn" style="width:100%" value="${esc(o.def || '')}" placeholder="${esc(o.ph || '')}">` : ''}`;
+    $('#cfmB').innerHTML = `<p style="margin:0 0 10px;font-size:15px;white-space:pre-line">${esc(msg)}</p>${o.input ? `<input id="cfmIn" style="width:100%" value="${esc(o.def || '')}" placeholder="${esc(o.ph || '')}">` : ''}`;
     $('#cfmF').innerHTML = `<button class="btn" id="cfmNo">Cancelar</button><button class="btn ${o.peligro ? 'danger' : 'primary'}" id="cfmSi">${esc(o.ok || 'Aceptar')}</button>`;
     $('#cfmNo').onclick = () => fin(o.input ? null : false);
     $('#cfmSi').onclick = () => fin(o.input ? $('#cfmIn').value : true);
@@ -1119,8 +1120,28 @@ function pregunta(msg, o = {}){
     const inp = $('#cfmIn'); if (inp) { inp.focus(); inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('#cfmSi').click(); } }; } else $('#cfmSi').focus();
   });
 }
+// borrar un cliente con todo lo suyo: pólizas, pagos, siniestros, tareas y documentos
+async function delCliente(id){
+  const c = byId('clientes', id); if (!c) return;
+  const pols = db.polizas.filter(p => p.clienteId === id), pids = new Set(pols.map(p => p.id));
+  const cobs = db.cobros.filter(x => pids.has(x.polizaId)), cids = new Set(cobs.map(x => x.id));
+  const sins = db.siniestros.filter(x => pids.has(x.polizaId) || x.clienteId === id), tars = db.tareas.filter(t => t.clienteId === id);
+  const liq = cobs.filter(x => x.liqId).length, pag = cobs.filter(x => x.estado === 'Pagado').length;
+  const det = [pols.length && `${pols.length} póliza(s)`, cobs.length && `${cobs.length} pago(s)${pag ? ` (${pag} ya cobrado(s))` : ''}`, sins.length && `${sins.length} siniestro(s)`, tars.length && `${tars.length} tarea(s)`].filter(Boolean);
+  const msg = `¿Borrar al cliente ${c.nombre}?` + (det.length ? `\n\nTambién se borrará: ${det.join(', ')}.` : '') + (liq ? `\n\n${liq} pago(s) ya están en una liquidación de comisiones: la liquidación queda guardada, pero sin esos pagos.` : '') + '\n\nEsto no se puede deshacer.';
+  if (!(await pregunta(msg, {ok:det.length ? 'Borrar cliente y todo lo suyo' : 'Borrar cliente', peligro:true}))) return;
+  pols.forEach(p => (p.archivos || []).forEach(a => idbDel(a.id).catch(() => {})));
+  db.clientes = db.clientes.filter(x => x.id !== id);
+  db.polizas = db.polizas.filter(p => !pids.has(p.id));
+  db.cobros = db.cobros.filter(x => !cids.has(x.id));
+  db.siniestros = db.siniestros.filter(x => !sins.includes(x));
+  db.tareas = db.tareas.filter(t => !tars.includes(t));
+  (db.liquidaciones || []).forEach(l => { l.items = (l.items || []).filter(i => !cids.has(i)); });
+  try { dlg.close(); } catch(e) {}
+  save(); toast('Cliente borrado'); render();
+}
 async function del(mod, id){
-  if (mod === 'clientes' && db.polizas.some(p => p.clienteId === id)) return toast('Este cliente tiene pólizas; bórralas primero');
+  if (mod === 'clientes') return delCliente(id);
   if (mod === 'polizas' && (db.cobros.some(c => c.polizaId === id) || db.siniestros.some(s => s.polizaId === id))) return toast('La póliza tiene cobros o siniestros asociados');
   if (CFG.includes(mod)) {
     const r = byId(mod, id), usos = {aseguradoras:p => p.aseguradora === r.nombre, ramos:p => p.ramo === r.nombre, categorias:p => (p.categorias||[]).includes(r.nombre), vendedores:p => (p.vendedores||[]).some(v => v.nombre === r.nombre)}[mod];
@@ -1344,7 +1365,7 @@ function showCliente(id){
     <h4>Cobros pendientes · ${DOP(cob.reduce((s,x)=>s+ +x.monto,0))}</h4>${tbl(cob, [x=>esc(byId('polizas',x.polizaId)?.numero), x=>fmtD(x.vencimiento), x=>DOP(x.monto), x=>pill(cobroEstado(x))])}
     <h4>Tareas abiertas</h4>${tbl(tar, [x=>esc(x.titulo), x=>fmtD(x.fecha), x=>pill(tareaEstado(x))])}
     <h4>Siniestros</h4>${tbl(sin, [x=>esc(x.numero), x=>esc(x.descripcion), x=>DOP(x.monto), x=>pill(x.estado)])}</div>`;
-  $('#dlgF').innerHTML = `<button class="btn" onclick="dlg.close();verEdoCuenta('${id}')">Estado de cuenta</button><button class="btn" onclick="dlg.close();generarPara('${id}','')">Generar documento</button><button class="btn" onclick="openForm('tareas');document.querySelector('#frm [name=clienteId]').value='${id}'">+ Tarea</button><button class="btn" onclick="dlg.close();openPoliza(null,{clienteId:'${id}'})">+ Póliza</button><button class="btn primary" onclick="openForm('clientes','${id}')">Editar</button>`;
+  $('#dlgF').innerHTML = `<button class="btn danger" style="margin-right:auto" onclick="delCliente('${id}')">Borrar</button><button class="btn" onclick="dlg.close();verEdoCuenta('${id}')">Estado de cuenta</button><button class="btn" onclick="dlg.close();generarPara('${id}','')">Generar documento</button><button class="btn" onclick="openForm('tareas');document.querySelector('#frm [name=clienteId]').value='${id}'">+ Tarea</button><button class="btn" onclick="dlg.close();openPoliza(null,{clienteId:'${id}'})">+ Póliza</button><button class="btn primary" onclick="openForm('clientes','${id}')">Editar</button>`;
   if (!dlg.open) dlg.showModal();
 }
 
